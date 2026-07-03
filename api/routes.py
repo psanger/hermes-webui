@@ -11354,17 +11354,19 @@ def handle_get(handler, parsed) -> bool:
         return True
 
     if parsed.path == "/api/models":
-        # Profile-scoping for non-default profiles (#3957) is handled INSIDE
-        # get_available_models() — it binds the active profile's env + TLS on
-        # the detached rebuild worker (and the legacy synchronous rebuild),
-        # which the request-thread wrapper could not reach. See
-        # api.config.get_available_models cold path + profile_scope_for_detached_worker.
-        freshness = parse_qs(parsed.query or "").get("freshness", [""])[0].strip().lower()
-        if freshness == "session_visit":
-            return j(handler, get_available_models_for_session_visit())
-        if freshness:
-            return bad(handler, f"unknown models freshness: {freshness}", status=400)
-        return j(handler, get_available_models())
+        # Bind the request thread to the browser-selected profile before
+        # building the model picker payload. get_available_models() also has
+        # detached-worker profile handling for cold rebuilds, but the
+        # synchronous/read-through path still observes process env/config.
+        from api.profiles import profile_env_for_active_request
+
+        with profile_env_for_active_request("/api/models", logger_override=logger):
+            freshness = parse_qs(parsed.query or "").get("freshness", [""])[0].strip().lower()
+            if freshness == "session_visit":
+                return j(handler, get_available_models_for_session_visit())
+            if freshness:
+                return bad(handler, f"unknown models freshness: {freshness}", status=400)
+            return j(handler, get_available_models())
 
     if parsed.path == "/api/models/live":
         from api.profiles import profile_env_for_active_request
@@ -13904,7 +13906,14 @@ def handle_post(handler, parsed) -> bool:
         return _handle_bg_task_complete_ack(handler, body)
 
     if parsed.path == "/api/chat/start":
-        return _handle_chat_start(handler, body, diag=diag)
+        # Bind chat startup to the browser-selected profile before resolving
+        # model/provider credentials. Without this wrapper, a non-default
+        # profile can display the correct provider while the background agent
+        # resolves env/config from the WebUI process/default profile.
+        from api.profiles import profile_env_for_active_request
+
+        with profile_env_for_active_request("/api/chat/start", logger_override=logger):
+            return _handle_chat_start(handler, body, diag=diag)
 
     if parsed.path == "/api/chat":
         return _handle_chat_sync(handler, body)

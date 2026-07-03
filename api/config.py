@@ -2945,7 +2945,11 @@ def _strip_provider_hint_for_reasoning(model_id: str, provider: str | None = Non
         if model.lower().startswith(exact_prefix):
             return model[len(exact_prefix) :]
     if ":" in model:
-        return model.split(":", 1)[1]
+        # Named custom providers can include ':' in the routing prefix
+        # (for example @custom:vertex-gemini:gemini-3.5-flash).  If no
+        # resolved provider was supplied, keep the right-most segment as the
+        # model id so capability checks see the actual model family.
+        return model.rsplit(":", 1)[1]
     return model
 
 
